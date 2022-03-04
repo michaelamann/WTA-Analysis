@@ -1,0 +1,124 @@
+---
+title: "Playing Styles"
+author: "Michael Mann"
+date: "2/17/2022"
+output: html_document
+---
+
+```{r setup}
+library(tidyverse)
+library(rvest) # scrape data
+library(mclust) # for clustering
+library(janitor) # clean up variable names
+```
+
+
+```{r scraping summaries from tennis abstract}
+# path to all files
+scrape_table <- function(url){
+  read_html(url) %>%
+  html_nodes("table.tablesorter") %>%
+  .[1] %>% # keep the third of these tables
+  .[[1]] %>% # keep the first element of this list
+  html_table(fill=T)  %>%
+  clean_names() %>%
+  mutate_at(vars(contains("_")), str_replace, pattern = "%", replacement = "") %>%
+  mutate_at(vars(contains("_")), as.numeric)
+  
+}
+# last 52 weeks
+rally <- scrape_table("https://tennisabstract.com/reports/mcp_leaders_rally_women_last52.html")
+return <- scrape_table("https://tennisabstract.com/reports/mcp_leaders_return_women_last52.html")
+tactics <- scrape_table("https://tennisabstract.com/reports/mcp_leaders_tactics_women_last52.html")
+serve <- scrape_table("https://tennisabstract.com/reports/mcp_leaders_serve_women_last52.html")
+
+
+# career files. 
+# rally <- scrape_table("https://tennisabstract.com/reports/mcp_leaders_rally_women_career.html")
+# return <- scrape_table("https://tennisabstract.com/reports/mcp_leaders_return_women_career.html")
+# tactics <- scrape_table("https://tennisabstract.com/reports/mcp_leaders_tactics_women_career.html")
+# serve <- scrape_table("https://tennisabstract.com/reports/mcp_leaders_serve_women_career.html")
+
+# merge all
+all_tables <- 
+  rally %>%
+  full_join(return, by = c("player", "matches")) %>%
+  full_join(tactics, by = c("player", "matches")) %>%
+  full_join(serve, by = c("player", "matches")) 
+
+# pulling out names and matches. 
+metadata <-   all_tables %>%
+  select(player, matches)
+
+# running variables of most importance. 
+data_for_gmm <- 
+  all_tables %>%
+  select(rally_len, rdi, bh_slice_percent, fhp_100, bhp_100, ri_p_percent, sn_v_freq, net_freq, drop_freq, rally_agg, unret_percent) 
+
+# created another that is more tactic focused. Trying to avoid the bias of good playres with forehand/backhand potency
+neutral_gmm <- 
+  all_tables %>%
+  select(rally_len, rdi, bh_slice_percent, sn_v_freq, net_freq, drop_freq, rally_agg) 
+
+
+# runnign the models to choose which parameters. 
+gmm_model <- Mclust(neutral_gmm)
+
+# looks like 4 is optimal
+plot(neutral_gmm, what = "BIC")
+
+
+# choosing the better parameters. 
+gmm_model_final <- Mclust(neutral_gmm, G = 4)
+
+# plot the uncertainty for each player in each cluster. 
+  tibble(uncertainty = gmm_model_final$uncertainty, cluster = gmm_model_final$classification, player = metadata$player) %>%
+  ggplot(aes(x = uncertainty, y = reorder(player, uncertainty))) + 
+  geom_point() + facet_wrap(~ cluster, scales = "free_y") + ylab("Players")
+
+
+
+# heat map to see how the raw data compares for each player. 
+data_for_gmm %>%
+  mutate_all(scales::rescale) %>%
+  rename_all( ~ paste0("feature_", .x)) %>% # so i can pivot easily
+  add_column(classification = gmm_model_final$classification) %>%
+  add_column(uncertainty = gmm_model_final$uncertainty) %>%
+  add_column(player = metadata$player) %>%
+  filter(uncertainty < 0.25) %>% # remove players that didn't fit well
+  pivot_longer(cols = starts_with("feature"), names_to = "Feature", values_to = "Value") %>%
+  mutate(Feature = str_replace(string = Feature, pattern = "feature_", replacement = "")) %>% # remove feature in name
+  ggplot(aes(x = Feature, y = player,  fill = Value)) + geom_tile() + facet_wrap(~classification, scales = "free_y") + scale_fill_gradient(name = "Sqrt(Abundance)",
+                      low = "#FFFFFF",
+                      high = "#012345")  + theme(axis.text.x = element_text(angle = 90))
+  
+  
+
+data_for_gmm %>%
+  mutate_all(scales::rescale) %>%
+  rename_all( ~ paste0("feature_", .x)) %>% # so i can pivot easily
+  add_column(classification = gmm_model_final$classification) %>%
+    add_column(uncertainty = gmm_model_final$uncertainty) %>%
+  add_column(player = metadata$player) %>%
+  filter(uncertainty < 0.25) %>% # remove players that didn't fit well
+  #filter(classification %in% c(2,6)) %>%
+  pivot_longer(cols = starts_with("feature"), names_to = "Feature", values_to = "Value") %>%
+  mutate(Feature = str_replace(string = Feature, pattern = "feature_", replacement = "")) %>% # remove feature in name
+  mutate(classification = as.factor(classification)) %>%
+  ggplot(aes(x = classification, y = Value, color = classification, fill = classification)) + geom_boxplot() + facet_wrap(~Feature)
+
+
+
+tibble(classification = gmm_model_final$classification, players = metadata$player) %>%
+  arrange((classification)) %>%
+  print(n = 100)
+
+```
+
+cluster 1 = big servers, agressive hitters (low return of serve percentage)
+cluster 2 = weak serve, baseliner, deep servive returns
+cluster 3 = all around (short return shots)
+cluster 4 = big groundstrokes (deep returns)
+cluster 5 = slicers/nets/big serves
+cluster 6 = stronger defensive players, high return percentage
+

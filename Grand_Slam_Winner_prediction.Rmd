@@ -1,0 +1,256 @@
+---
+title: "Potential_WTA"
+author: "Michael Mann"
+date: "12/22/2021"
+output: html_document
+---
+# peak rank at 100 win rate and career slam semifinal appearences.
+
+
+# factors:
+# rank at age 20 * win percentage at age 20
+# parse out by surface
+
+
+
+# to be fair since some players are younger and haven't had a chance to win a slam. So going to cut it off after 30. 
+# I will limit my search between players who were 20 in 1970 to 2010. 
+
+# thus have to be born between 1950 and 1990. 
+
+
+### Tasks
+
+# merge all match data into one dataframe. Clean it up. 
+# Calculate win percentage for players between 1970 and 2010. Then filter it for just players who were 20. 
+# tally up number of slam wins and semi-final appearences. 
+
+# merge two sources of data into one dataframe. 
+
+```{r packages}
+library(tidyverse)
+
+```
+Creates list of all players and their matches between 1980 and 2019
+```{r import and merge all data}
+wta_data <- 
+  tibble(
+    files = 
+      c(list.files(path = "tennis_wta-master", pattern = "wta_matches_198..csv", full.names = T),
+      list.files(path = "tennis_wta-master", pattern = "wta_matches_199..csv", full.names = T),
+      list.files(path = "tennis_wta-master", pattern = "wta_matches_200..csv", full.names = T),
+      list.files(path = "tennis_wta-master", pattern = "wta_matches_201..csv", full.names = T), 
+       list.files(path = "tennis_wta-master", pattern = "wta_matches_2021.csv", full.names = T))
+    ) %>% 
+  mutate(matches = map(files, read_csv, 
+                       col_types =  
+                         cols_only(
+                            tourney_id = col_character(),
+                            tourney_name = col_character(),
+                            surface = col_character(),
+                            tourney_level = col_character(),
+                            tourney_date = col_double(),
+                            match_num = col_double(),
+                            winner_id = col_double(),
+                            winner_entry = col_character(),
+                            winner_name = col_character(),
+                            winner_hand = col_character(),
+                            winner_ht = col_double(),
+                            winner_ioc = col_character(),
+                            winner_age = col_double(),
+                            loser_id = col_double(),
+                            loser_entry = col_character(),
+                            loser_name = col_character(),
+                            loser_hand = col_character(),
+                            loser_ht = col_double(),
+                            loser_ioc = col_character(),
+                            loser_age = col_double(),
+                            score = col_character(),
+                            best_of = col_double(),
+                            round = col_character()   
+                          )
+                       )
+         ) %>% # this import specfic columns for each datasheet
+  mutate(year = str_extract(string = files, pattern = "[:digit:][:digit:][:digit:][:digit:]")) %>%
+  mutate(year = as.numeric(year)) %>%
+  unnest(matches)
+  
+
+```
+
+
+
+creates player_record_year which has the number of wins per year for each player. 
+```{r player record}
+# winner table
+wins_player_year <- 
+  wta_data %>%
+  group_by(winner_name, winner_id,  year) %>%
+  summarise(matches_won = n(), .groups = "drop") %>%
+  drop_na() %>%
+  rename(name = winner_name)
+
+
+losses_player_year <- 
+  wta_data %>%
+  group_by(loser_name, loser_id, year) %>%
+  summarise(matches_loss = n(), .groups = "drop") %>%
+  drop_na() %>%
+  rename(name = loser_name)
+
+player_record_year <- 
+  wins_player_year %>%
+  full_join(losses_player_year, by = c("name", "year")) %>%
+  mutate(total_played = matches_won + matches_loss) %>%
+  mutate(percent_won = 100 * (matches_won /total_played ))
+```
+
+
+
+Creates a list of all players who were 20 between 1980 to 2010. 
+```{r potential players list}
+players <- read_csv(file = "tennis_wta-master/wta_players.csv")
+
+potential_players <- 
+  players %>%
+  mutate(dob = lubridate::ymd(dob)) %>%
+  drop_na(dob) %>%
+  mutate(year_born = lubridate::year(dob)) %>%
+  mutate(year_at_20 = year_born + 20) %>% # calculate the year they turned 20
+  filter(year_at_20 >= 1980 & year_at_20 <= 2010) 
+  
+  
+
+```
+
+
+```{r players who entered top 100 and within the time window}
+
+ranking_data_year_low <- 
+  tibble(
+    files = 
+      c(list.files(path = "tennis_wta-master", pattern = "wta_rankings_.0", full.names = T))) %>% 
+  mutate(rankings = map(files, read_csv)) %>%
+  unnest(rankings) %>%
+  mutate(ranking_date= lubridate::ymd(ranking_date)) %>%
+  mutate(year = lubridate::year(ranking_date)) %>%
+  group_by(year, player) %>%
+  summarise(top_rank_by_year = min(rank), .groups = "drop") %>%
+  rename(player_id = player) %>%
+  right_join(potential_players, by =  "player_id") %>%
+  filter(year_at_20 == year) %>%
+  filter(top_rank_by_year <= 100)
+
+top_100_women <- 
+  ranking_data_year_low %>%
+  pull(player_id)
+```
+
+
+
+# makes a dataframe with the number of slam appearences and finals by player.
+```{r compile records of players}
+slam_sucess <- 
+  wta_data %>%
+  select(winner_id, loser_id, tourney_name, round) %>%
+  filter(tourney_name %in% c("Australian Open", "Roland Garros", "Wimbledon", "US Open")) %>%
+  filter(round == "F"| round == "SF") %>%
+  pivot_longer(cols = c("winner_id", "loser_id"), names_to = "Outcome", values_to = "player_id") %>%
+  mutate(Outcome = str_replace(Outcome, pattern = "_id", replacement = "")) %>%
+  group_by(round, player_id, Outcome) %>%
+  count() %>%
+  pivot_wider(names_from = "round", values_from = "n") %>%
+  ungroup() %>%
+  replace_na(list("F"=  0,"SF" = 0)) %>%
+  group_by(player_id) %>%
+  mutate(Finals_Appearences = sum(`F`), Semifinals_Apperences = sum(SF)) %>%
+  ungroup() %>%
+  filter(Outcome == "winner") %>%
+  rename(Finals_Won = `F`, Semifinals_Won = "SF") %>%
+  select(-Outcome)
+
+
+
+```
+
+# this puts all the pieces together. 
+```{r }
+processed_dataset <- 
+  player_record_year %>%
+  filter(winner_id %in% top_100_women) %>%
+  rename(player_id = winner_id) %>%
+  left_join(potential_players, by = "player_id") %>%
+  filter(year_at_20 == year) %>% # this is a different filter than above since this is the year of their winning record. 
+  left_join(slam_sucess, by = "player_id") %>%
+  select(name, year, year_born, year_at_20, matches_won, matches_loss, total_played, percent_won, Finals_Won:Semifinals_Apperences) %>%
+  replace_na(list("Finals_Won"=  0,"Semifinals_Won" = 0, "Finals_Appearences"  = 0, "Semifinals_Apperences" = 0))
+  
+  
+
+
+```
+
+
+```{r preliminary plots}
+
+processed_dataset %>%
+  filter(total_played > 20) %>%
+  ggplot(aes(x = percent_won, y = Finals_Appearences, label = name)) +
+  geom_text()
+
+
+```
+
+
+```{r }
+library(emmeans)
+processed_dataset_20 <- 
+ processed_dataset %>%
+  filter(total_played > 20) %>%
+  mutate(slam_champ = Finals_Won > 0) %>%
+  mutate(slam_semifinalist = Semifinals_Apperences > 0)
+
+m1 <- glm(slam_champ ~ percent_won, family = binomial(), data = processed_dataset_20)
+res <- DHARMa::simulateResiduals(m1, plot = T)
+
+null <- glm(Finals_Appearences ~ 1, family = binomial(), data = processed_dataset_20)
+anova(m1, null, test="Chisq")
+m1_grid <- emmeans::ref_grid(m1, at =list(percent_won = seq(from = 50, to = 90, by = 2.5)))
+model_predict <- plot(m1_grid)
+model_predict + scale_x_continuous(breaks = c(-8:4)) + geom_vline(xintercept = 0) 
+
+
+```
+```{r }
+library(ggridges)
+
+
+processed_dataset_20 %>%
+  ggplot(aes(y = slam_champ, x = percent_won)) +
+  geom_density_ridges(alpha = .2,) + geom_vline(xintercept = 65.6) + 
+  theme_ridges(grid = FALSE, center_axis_labels = TRUE)
+
+```
+
+
+
+```{r upcoming playres}
+
+upcoming_players <- 
+  players %>%
+  mutate(dob = lubridate::ymd(dob)) %>%
+  drop_na(dob) %>%
+  mutate(year_born = lubridate::year(dob)) %>%
+  mutate(year_at_20 = year_born + 20) %>% # calculate the year they turned 20
+  filter(year_at_20 >= 2018) 
+
+player_record_year %>%
+  rename(player_id = winner_id) %>%
+  left_join(upcoming_players, by = "player_id") %>%
+  drop_na(year_born) %>%
+  filter(year_at_20 == year -1) %>%
+  filter(total_played >= 20) %>%
+  View()
+
+
+```
