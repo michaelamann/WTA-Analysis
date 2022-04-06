@@ -1,0 +1,13 @@
+name: WTA_Playstyle
+title: WTA_Playstyle
+username:
+account: michaelamann
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 6025349
+bundleId: 5769061
+url: https://michaelamann.shinyapps.io/WTA_Playstyle/
+when: 1649224516.64565
+lastSyncTime: 1649224516.64566
+asMultiple: FALSE
+asStatic: FALSE
